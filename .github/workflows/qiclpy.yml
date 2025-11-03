@@ -1,0 +1,77 @@
+name: Lint Markdown and Python
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: Run linters
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --- Setup Python + uv ---
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync dependencies
+        run: uv sync --dev
+
+      - name: Install nbqa and pylint
+        run: uv add nbqa pylint --dev
+
+      # --- Setup Node.js for markdown linting ---
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install markdownlint-cli2
+        run: npm install -g markdownlint-cli2
+
+      # --- Lint Python and notebooks separately ---
+      - name: Run linters
+        run: |
+          mkdir -p scripts
+          cat > scripts/lint.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          cd "$(git rev-parse --show-toplevel)"
+
+          echo "🔍 Collecting Python and notebook files..."
+          PY_FILES=$(git ls-files '*.py' | sed 's|^|./|')
+          NB_FILES=$(find . -type f -name "*.ipynb" -not -path "*/.ipynb_checkpoints/*")
+
+          echo "🚀 Running pylint on Python files..."
+          if [ -n "$PY_FILES" ]; then
+            uv run pylint --disable=R0801,import-error --exit-zero $PY_FILES
+          else
+            echo "No Python files found."
+          fi
+
+          echo "🚀 Running nbqa pylint on notebooks..."
+          if [ -n "$NB_FILES" ]; then
+             uv run nbqa pylint --disable=R0801 --exit-zero $(git ls-files '*.py' | xargs) 
+          else
+            echo "No notebooks found."
+          fi
+
+          echo "✅ Python and notebook linting complete!"
+          EOF
+
+          chmod +x scripts/lint.sh
+          ./scripts/lint.sh
+
+      # --- Lint Markdown files ---
+      - name: Run markdownlint-cli2
+        run: markdownlint-cli2 "**/*.md" || true
